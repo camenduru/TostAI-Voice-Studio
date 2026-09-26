@@ -24,7 +24,6 @@ Exits non-zero if any mode fails, so it is usable as a gate.
 from __future__ import annotations
 
 import argparse
-import json
 import struct
 import sys
 import time
@@ -261,7 +260,7 @@ def main() -> int:
     base = args.base.rstrip("/")
     try:
         status = httpx.get(f"{base}/api/status", timeout=10).json()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise SystemExit(f"no app server at {base}: {exc}") from exc
     print(f"app    : {base}")
     print(f"model  : {'online' if status['connected'] else 'OFFLINE -- expecting demo audio'} "

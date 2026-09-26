@@ -120,11 +120,12 @@ the code nor the weights come from the context.
 
 Notes worth knowing before you build:
 
-* **The HuggingFace repo is public**, so no token is needed. A gated mirror can
-  be used with `docker build --secret id=hf_token,env=HF_TOKEN .` — the token
-  arrives as a secret mount, never as an `ARG` or `ENV`, so it stays out of
-  `docker history`. `required=true` is deliberately *not* set, so the public
-  build does not demand a flag it does not need.
+* **Both repos are public**, so no token is needed. `HF_TOKEN` and
+  `GITHUB_TOKEN` can be supplied as secret mounts for a gated or private mirror
+  (`--secret id=hf_token,env=HF_TOKEN --secret id=gh_token,env=GITHUB_TOKEN`) —
+  never as `ARG` or `ENV`, so they stay out of `docker history`.
+  `required=true` is deliberately *not* set, so the public build does not demand
+  flags it does not need.
 * **No CUDA toolkit is installed.** The pip torch wheels carry their own CUDA
   runtime; only the host driver is required, which is why `--gpus all` is the
   whole GPU story.
@@ -135,6 +136,46 @@ Notes worth knowing before you build:
 * `BREEZE_MODEL_FLAGS="--fast-all"` enables the fast path at run time;
   `BREEZE_SERVE_MODEL=0` makes the container UI-only, pointing at
   `BREEZE_API_URL` instead.
+
+## Configuration
+
+`.env` holds **credentials only** — `HF_TOKEN` and `GITHUB_TOKEN` — and nothing
+else. It is gitignored and excluded from the Docker build context, so nothing in
+it is committed or uploaded to the builder.
+
+Both tokens are **optional**: `BreezeBlue/Breeze-TTS-2` and
+`breezeblue-ai/breeze-tts` are public, so a normal build and run need neither.
+They exist for a gated or private mirror, and `GITHUB_TOKEN` also lifts GitHub's
+anonymous clone rate limit.
+
+```bash
+set -a; . ./.env; set +a        # `set -a` is required: it marks values for export
+docker build \
+  --secret id=hf_token,env=HF_TOKEN \
+  --secret id=gh_token,env=GITHUB_TOKEN \
+  -t tostai-voice-studio .
+```
+
+The tokens arrive as secret mounts, never as `ARG` or `ENV`, so they stay out of
+`docker history` and the image config. Each assignment is guarded as
+`NAME=${NAME:-}`, so a value already in your environment wins — keep the guard
+if you edit the file.
+
+The app's own behaviour is set with **ordinary environment variables**, which
+belong in your shell or in `docker run -e` rather than in a credentials file:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `BREEZE_API_URL` | `http://127.0.0.1:7860` | Model server the studio talks to |
+| `BREEZE_OUTPUTS_DIR` | `./outputs` | Where takes are written; point it at a volume |
+| `BREEZE_SERVE_MODEL` | `1` | `0` runs the UI alone against `BREEZE_API_URL` |
+| `BREEZE_MODEL_FLAGS` | *(empty)* | Extra flags for `breeze_infer.api`, e.g. `--fast-all` |
+| `BREEZE_MODEL_PORT` | `7860` | Model server port (inside the container) |
+| `BREEZE_STUDIO_PORT` | `8000` | UI port |
+| `BREEZE_REV` | `main` | Checkpoint revision baked into the image (build-time) |
+
+An **empty** value is treated as unset by the studio, so `BREEZE_OUTPUTS_DIR=`
+keeps the default folder.
 
 ## HTTP surface
 

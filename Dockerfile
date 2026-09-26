@@ -35,14 +35,34 @@
 # `models` as top-level packages).
 #
 # ---------------------------------------------------------------------------
-# THE TOKEN IS OPTIONAL, AND THAT IS MEASURED, NOT ASSUMED
+# BOTH TOKENS ARE OPTIONAL, AND THAT IS MEASURED, NOT ASSUMED
 #
-# BreezeBlue/Breeze-TTS-2 answers `resolve/main/config.json` with 200 and no
-# Authorization header, i.e. it is a public repo, so the normal build needs no
-# token at all. A token is still supported for a gated mirror, passed the same
-# way the reference RunPod-style images do it:
+# Neither is needed for a normal build:
 #
-#   docker build --secret id=hf_token,env=HF_TOKEN -t tostai-voice-studio .
+#   * BreezeBlue/Breeze-TTS-2 answers `resolve/main/config.json` with 200 and no
+#     Authorization header, i.e. the model repo is public.
+#   * breezeblue-ai/breeze-tts is public, so the clone needs no credential.
+#
+# They exist for a gated or private mirror, and GITHUB_TOKEN additionally lifts
+# GitHub's anonymous rate limit on a build farm. Both are passed the same way
+# the reference RunPod-style images do it:
+#
+#   docker build \
+#     --secret id=hf_token,env=HF_TOKEN \
+#     --secret id=gh_token,env=GITHUB_TOKEN \
+#     -t tostai-voice-studio .
+#
+# Docker reads neither your shell environment nor `.env` on its own: the
+# `env=NAME` on each `--secret` is what lifts the value out of the process
+# environment the build is running in. That is why this directory ships a
+# gitignored `.env` holding nothing but these two tokens, each guarded as
+# NAME=${NAME:-} so a value already in your environment wins:
+#
+#   set -a; . ./.env; set +a
+#
+# `set -a` is required -- without it the values stay shell-local and the build
+# sees nothing. `.env` is also in `.dockerignore`, so it never reaches the
+# builder's context.
 #
 # `--secret ...,env=NAME` lifts the value out of the caller's environment and
 # `--mount=type=secret,...,env=NAME` exposes it to that ONE RUN. It is NOT an
@@ -130,9 +150,23 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 # Placed above the torch install so that a change to the code does not force a
 # ~2.5 GB torch re-download: this layer is a few MB and rebuilds in seconds.
 # ---------------------------------------------------------------------------
-RUN git clone --depth 1 https://github.com/breezeblue-ai/breeze-tts /app/breeze-tts \
-    && rm -rf /app/breeze-tts/.git \
-    && test -f /app/breeze-tts/breeze_infer/api.py
+# The token, when supplied, goes into the clone's remote URL rather than an
+# extraheader -- and `.git` is removed in THIS SAME RUN, so the credentialed URL
+# never reaches a layer. The instruction text in `docker history` shows the
+# shell variable, not the value, because the value arrives from the secret mount
+# at build time and is never interpolated by the Dockerfile parser.
+RUN --mount=type=secret,id=gh_token,env=GITHUB_TOKEN \
+    set -eu; \
+    if [ -n "${GITHUB_TOKEN:-}" ]; then \
+        echo "cloning with a GITHUB_TOKEN"; \
+        url="https://x-access-token:${GITHUB_TOKEN}@github.com/breezeblue-ai/breeze-tts.git"; \
+    else \
+        echo "cloning anonymously (the repo is public)"; \
+        url="https://github.com/breezeblue-ai/breeze-tts.git"; \
+    fi; \
+    git clone --depth 1 "$url" /app/breeze-tts; \
+    rm -rf /app/breeze-tts/.git; \
+    test -f /app/breeze-tts/breeze_infer/api.py
 
 # ---------------------------------------------------------------------------
 # Dependencies, split so the big one caches on its own
@@ -216,7 +250,10 @@ ENV HF_HUB_OFFLINE=1 \
 # when the app is pointed at BREEZE_OUTPUTS_DIR elsewhere.
 # ---------------------------------------------------------------------------
 WORKDIR /app/breeze-app
-COPY --chown=camenduru:camenduru server.py docker_selfcheck.py docker-entrypoint.sh ./
+# smoke_modes.py comes along so a running container can be verified in place:
+#   docker exec <id> python /app/breeze-app/smoke_modes.py
+# It drives the studio over HTTP and needs no GPU of its own.
+COPY --chown=camenduru:camenduru server.py docker_selfcheck.py docker-entrypoint.sh smoke_modes.py ./
 COPY --chown=camenduru:camenduru static ./static
 RUN chmod +x /app/breeze-app/docker-entrypoint.sh \
     && mkdir -p /app/breeze-app/outputs \

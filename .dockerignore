@@ -1,18 +1,26 @@
 # ---------------------------------------------------------------------------
 # Build context
 # ---------------------------------------------------------------------------
-# The Dockerfile reads three things from the context: server.py,
-# docker_selfcheck.py, docker_entrypoint.sh and static/. Everything else the
-# image contains -- the inference code and the 7.2 GB of weights -- is fetched
-# over the network during the build.
+# The Dockerfile reads a handful of files from the context: server.py,
+# docker_selfcheck.py, docker-entrypoint.sh, smoke_modes.py and static/.
+# Everything else the image contains -- the inference code and the 7.2 GB of
+# weights -- is fetched over the network during the build.
 #
 # So: keep the studio's source, drop everything that is either a local artifact
 # or a copy of something the build downloads anyway.
 #
+# .env is the entry that would actually MATTER. It can hold HF_TOKEN, and the
+# build context is uploaded to whatever builder is in use unless it is excluded
+# here. A secret does not need to be in the context to be usable --
+# `--secret ...,env=` reads it from the CALLER's environment instead. BuildKit
+# warns when a secret is passed as ARG or ENV; it cannot warn about a file you
+# forgot to ignore.
+.env
+.env.*
+
 # The virtualenv is the one that would actually hurt: .venv is ~60 MB of files
 # that the image rebuilds from requirements.txt, and BuildKit has to hash and
 # transfer every one of them on every build.
-
 .venv/
 __pycache__/
 *.py[cod]

@@ -3,6 +3,13 @@ __pycache__/
 .venv/
 .ruff_cache/
 
+# `.env` holds HF_TOKEN, which the Docker build consumes via
+# `--secret id=hf_token,env=HF_TOKEN`. It is a FILE -- the .venv/ entry above is
+# the virtualenv and the two are easy to confuse. `.env.*` covers the per-machine
+# variants, so a token never reaches the repository.
+.env
+.env.*
+
 # Every take the app writes is runtime data, not source. Both the WAVs and their
 # JSON sidecars are ignored; .gitkeep holds the folder itself.
 outputs/*

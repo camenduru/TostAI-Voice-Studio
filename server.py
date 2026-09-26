@@ -42,9 +42,14 @@ STATIC_DIR = APP_DIR / "static"
 # Every finished take is written here, so the shelf in the UI survives a reload
 # and a restart. Override with BREEZE_OUTPUTS_DIR (the image points it at a
 # directory that can be mounted as a volume).
-OUTPUTS_DIR = Path(os.environ.get("BREEZE_OUTPUTS_DIR", APP_DIR / "outputs"))
+#
+# `or` rather than a get() default, in both this and DEFAULT_UPSTREAM below: a
+# variable that is SET BUT EMPTY -- which is what sourcing a .env line like
+# BREEZE_OUTPUTS_DIR=${BREEZE_OUTPUTS_DIR:-} leaves behind -- would otherwise
+# win, and Path("") is the current directory.
+OUTPUTS_DIR = Path(os.environ.get("BREEZE_OUTPUTS_DIR") or (APP_DIR / "outputs"))
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+\.wav$")
-DEFAULT_UPSTREAM = os.environ.get("BREEZE_API_URL", "http://127.0.0.1:7860")
+DEFAULT_UPSTREAM = os.environ.get("BREEZE_API_URL") or "http://127.0.0.1:7860"
 DEFAULT_SAMPLE_RATE = 24000
 UPSTREAM_HEALTH_TIMEOUT = 1.5
 

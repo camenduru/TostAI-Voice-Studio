@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+
+# Every take the app writes is runtime data, not source. Both the WAVs and their
+# JSON sidecars are ignored; .gitkeep holds the folder itself.
+outputs/*
+!outputs/.gitkeep
+
+*.wav
+*.pcm

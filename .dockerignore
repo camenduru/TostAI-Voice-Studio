@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Build context
+# ---------------------------------------------------------------------------
+# The Dockerfile reads three things from the context: server.py,
+# docker_selfcheck.py, docker_entrypoint.sh and static/. Everything else the
+# image contains -- the inference code and the 7.2 GB of weights -- is fetched
+# over the network during the build.
+#
+# So: keep the studio's source, drop everything that is either a local artifact
+# or a copy of something the build downloads anyway.
+#
+# The virtualenv is the one that would actually hurt: .venv is ~60 MB of files
+# that the image rebuilds from requirements.txt, and BuildKit has to hash and
+# transfer every one of them on every build.
+
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# Local audio the app wrote while being developed.
+*.wav
+*.pcm
+outputs/
+
+# Not read at runtime; the README is documentation for the host checkout.
+README.md
+
+.git/
+.gitignore
+Dockerfile
+.dockerignore

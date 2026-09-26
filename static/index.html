@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TostAI Voice Studio</title>
+<link rel="icon" href="/static/favicon.ico" sizes="any" />
+<script>
+// The theme is resolved BEFORE the first paint, or a dark page flashes the light
+// palette and then repaints. A stored choice wins; with none, the OS decides.
+// styles.css carries the two palettes under the same variable names.
+(function () {
+  var t = null;
+  try { t = localStorage.getItem("tostai.voice.theme"); } catch (e) { /* private mode */ }
+  if (t !== "light" && t !== "dark")
+    t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark" : "light";
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-icon" src="/static/logo.png" alt="" />
+    <div class="brand-text">
+      <h1>TostAI Voice Studio</h1>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <button id="status-badge" class="badge compact" type="button"
+            title="Checking the model server…" aria-label="Model status">
+      <span class="dot"></span><span id="status-text" class="sr-only">checking…</span>
+    </button>
+    <span id="sample-rate-chip" class="chip">24 kHz · mono</span>
+    <button id="facts-button" class="chip ghost" type="button">Model facts</button>
+    <button id="theme-toggle" class="chip ghost" type="button">Dark</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ─────────────────────────── Composer ─────────────────────────── -->
+  <section class="panel composer">
+    <div class="modes" id="modes" role="tablist"></div>
+    <p class="hint" id="mode-hint"></p>
+
+    <div class="field">
+      <div class="field-head">
+        <label for="text">Text to speak</label>
+        <div class="field-head-right">
+          <div class="lang-toggle" id="lang-toggle" role="group" aria-label="Language">
+            <button type="button" class="lang-btn is-active" data-lang="en">EN</button>
+            <button type="button" class="lang-btn" data-lang="zh">中文</button>
+          </div>
+          <span id="text-count" class="counter">0</span>
+        </div>
+      </div>
+      <textarea id="text" rows="5" spellcheck="false"
+        placeholder="Type what the voice should say…"></textarea>
+      <div class="chips" id="event-chips" aria-label="Vocal events"></div>
+    </div>
+
+    <div class="field" id="instruction-field">
+      <div class="field-head">
+        <label for="instruction">Voice instruction</label>
+        <span class="tag" id="instruction-tag">instruction</span>
+      </div>
+      <textarea id="instruction" rows="3" spellcheck="false"
+        placeholder="Describe the voice, or how to deliver the line…"></textarea>
+      <div class="chips presets" id="preset-chips"></div>
+    </div>
+
+    <div class="field" id="reference-field">
+      <div class="field-head">
+        <label>Reference audio + exact transcript</label>
+        <span class="tag" id="ref-duration">no file</span>
+      </div>
+      <div class="dropzone" id="ref-drop" tabindex="0" role="button">
+        <input type="file" id="ref-input" accept="audio/*" hidden />
+        <div class="dropzone-inner">
+          <strong>Drop a clip</strong>
+          <span>or click to choose clean speech (wav / mp3 / flac…)</span>
+        </div>
+        <canvas id="ref-wave" class="ref-wave" height="48"></canvas>
+        <div class="ref-loaded" id="ref-loaded" hidden>
+          <span id="ref-name"></span>
+          <button type="button" class="link" id="ref-clear">remove</button>
+        </div>
+      </div>
+      <audio id="ref-preview" controls hidden></audio>
+      <textarea id="ref-text" rows="2" spellcheck="false"
+        placeholder="Exact transcript of the reference clip (must match the audio)"></textarea>
+    </div>
+
+    <details class="advanced" id="advanced">
+      <summary>Advanced controls</summary>
+      <div class="advanced-grid">
+        <div class="mini-field">
+          <label for="seed">Seed</label>
+          <div class="row">
+            <input id="seed" type="number" value="42" min="0" step="1" />
+            <button id="seed-random" class="ghost small" type="button">🎲</button>
+          </div>
+        </div>
+        <div class="mini-field">
+          <label for="cfg">CFG scale <span id="cfg-value" class="mono">1.0</span></label>
+          <input id="cfg" type="range" min="1" max="6" step="0.5" value="1" />
+          <small id="cfg-note"></small>
+        </div>
+        <label class="switch">
+          <input id="stream-toggle" type="checkbox" checked />
+          <span class="track"><span class="thumb"></span></span>
+          <span>Stream audio as it is generated</span>
+        </label>
+      </div>
+      <div class="fast-panel">
+        <div class="fast-head">
+          <strong>Server-side fast path</strong>
+          <span class="muted">Pass these to <code>python -m breeze_infer.api</code></span>
+        </div>
+        <ul id="fast-stages"></ul>
+      </div>
+    </details>
+
+    <div class="actions">
+      <button id="generate" class="primary" type="button">
+        <span class="spinner" id="spinner" hidden></span>
+        <span id="generate-label">Generate speech</span>
+      </button>
+      <button id="cancel" class="ghost" type="button" hidden>Cancel</button>
+      <button id="reset" class="ghost" type="button">Reset</button>
+    </div>
+    <p class="error" id="error" hidden></p>
+    <p class="license">Weights are research / non-commercial. Only clone voices you have consent to use.</p>
+  </section>
+
+  <!-- ─────────────────────────── Studio ─────────────────────────── -->
+  <section class="panel studio">
+    <div class="stage">
+      <canvas id="viz" class="viz"></canvas>
+      <div class="stage-overlay" id="stage-overlay">
+        <div class="stage-idle">Your generated voice will appear here</div>
+      </div>
+    </div>
+
+    <div class="player">
+      <button id="play" class="play" type="button" disabled aria-label="Play">▶</button>
+      <div class="player-body">
+        <div class="scrub-row">
+          <span class="mono time" id="time-current">0:00</span>
+          <input id="scrubber" type="range" min="0" max="1000" value="0" step="1" disabled />
+          <span class="mono time" id="time-total">0:00</span>
+        </div>
+        <div class="meta" id="meta">
+          <span class="tag" id="meta-template">—</span>
+          <span class="tag demo" id="meta-demo" hidden>demo audio · model offline</span>
+        </div>
+      </div>
+      <div class="player-actions">
+        <button id="download-wav" class="ghost small" type="button" disabled>WAV</button>
+        <button id="download-pcm" class="ghost small" type="button" disabled>PCM</button>
+      </div>
+    </div>
+
+    <div class="stats" id="stats">
+      <div class="stat"><span class="stat-label">Time to first audio</span><span class="stat-value mono" id="stat-ttfa">—</span></div>
+      <div class="stat"><span class="stat-label">Total generation</span><span class="stat-value mono" id="stat-total">—</span></div>
+      <div class="stat"><span class="stat-label">Real-time factor</span><span class="stat-value mono" id="stat-rtf">—</span></div>
+      <div class="stat"><span class="stat-label">Audio length</span><span class="stat-value mono" id="stat-length">—</span></div>
+    </div>
+
+    <div class="history-head">
+      <div>
+        <h2>Takes</h2>
+        <span class="folder" id="outputs-dir">saving to outputs/</span>
+      </div>
+      <button id="refresh-outputs" class="ghost small" type="button">Refresh</button>
+    </div>
+    <div class="history" id="history">
+      <p class="empty">Nothing yet — generate a voice to fill this shelf.</p>
+    </div>
+  </section>
+</main>
+
+<dialog id="facts-dialog" class="facts">
+  <button id="facts-close" class="close" type="button" aria-label="Close">✕</button>
+  <h2>Breeze TTS 2</h2>
+  <div id="facts-body"></div>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

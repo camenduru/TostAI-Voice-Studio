@@ -1,13 +1,14 @@
 # ---------------------------------------------------------------------------
 # Build context
 # ---------------------------------------------------------------------------
-# The Dockerfile reads a handful of files from the context: server.py,
-# docker_selfcheck.py, docker-entrypoint.sh, smoke_modes.py and static/.
-# Everything else the image contains -- the inference code and the 7.2 GB of
-# weights -- is fetched over the network during the build.
+# The Dockerfile reads exactly ONE file from the context: docker_selfcheck.py,
+# the build-time proof. Everything else the image contains -- the inference
+# code, the studio itself and the 7.2 GB of weights -- is fetched over the
+# network during the build (the studio is cloned from
+# github.com/camenduru/TostAI-Voice-Studio).
 #
-# So: keep the studio's source, drop everything that is either a local artifact
-# or a copy of something the build downloads anyway.
+# So: keep the build-time proof and drop everything else, which is either a
+# local artifact or a copy of something the build downloads anyway.
 #
 # .env is the entry that would actually MATTER. It can hold HF_TOKEN, and the
 # build context is uploaded to whatever builder is in use unless it is excluded
@@ -30,6 +31,14 @@ __pycache__/
 *.wav
 *.pcm
 outputs/
+
+# The studio's own source. It comes from the git clone, not the context, so
+# uploading it here would only slow the build down.
+server.py
+smoke_modes.py
+docker-entrypoint.sh
+static/
+requirements.txt
 
 # Not read at runtime; the README is documentation for the host checkout.
 README.md

@@ -19,7 +19,7 @@ set -euo pipefail
 
 CODE_DIR="${BREEZE_CODE_DIR:-/app/breeze-tts}"
 MODEL_DIR="${BREEZE_MODEL_DIR:-/app/breeze-tts-2}"
-STUDIO_DIR="${BREEZE_STUDIO_DIR:-/app/breeze-app}"
+STUDIO_DIR="${BREEZE_STUDIO_DIR:-/app/tostai-voice-studio}"
 MODEL_PORT="${BREEZE_MODEL_PORT:-7860}"
 STUDIO_PORT="${BREEZE_STUDIO_PORT:-8000}"
 UPSTREAM="${BREEZE_API_URL:-http://127.0.0.1:${MODEL_PORT}}"

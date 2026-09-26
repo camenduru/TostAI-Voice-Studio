@@ -7,8 +7,9 @@
 # TostAI Voice Studio -- self-contained image
 #
 # One stage, linear, everything fetched during the build: the inference code is
-# cloned from GitHub, the weights are downloaded from HuggingFace, the studio
-# itself is the only thing that comes from the build context.
+# cloned from GitHub, the weights are downloaded from HuggingFace, and the
+# studio itself is cloned from its own GitHub repository. The build context
+# supplies only docker_selfcheck.py.
 #
 #   docker build -t tostai-voice-studio .
 #
@@ -16,18 +17,18 @@
 #
 # then open http://127.0.0.1:8000.
 #
-# THE BUILD CONTEXT IS THIS DIRECTORY (breeze-app/), not the repo root. The
-# model repo beside it is 7.2 GB and the inference checkout is another clone --
-# neither is read from the context, so neither should be uploaded to the
-# builder. `.dockerignore` therefore ignores everything except the studio's own
-# source.
+# THE BUILD CONTEXT IS THIS DIRECTORY (tostai-voice-studio/), not the repo root.
+# The model repo beside it is 7.2 GB and the inference checkout is another clone
+# -- neither is read from the context, so neither should be uploaded to the
+# builder. `.dockerignore` therefore ignores everything except the studio's
+# build-time proof.
 #
 # ---------------------------------------------------------------------------
 # WHAT IS DOWNLOADED, AND WHERE IT LANDS
 #
 #   https://github.com/breezeblue-ai/breeze-tts   -> /app/breeze-tts
 #   https://huggingface.co/BreezeBlue/Breeze-TTS-2 -> /app/breeze-tts-2
-#   this studio                                    -> /app/breeze-app
+#   https://github.com/camenduru/TostAI-Voice-Studio -> /app/tostai-voice-studio
 #
 # Those three paths are what the app expects: the studio's `--upstream` is the
 # model server on loopback, and `python -m breeze_infer.api` is run with the
@@ -35,17 +36,19 @@
 # `models` as top-level packages).
 #
 # ---------------------------------------------------------------------------
-# BOTH TOKENS ARE OPTIONAL, AND THAT IS MEASURED, NOT ASSUMED
-#
-# Neither is needed for a normal build:
+# TOKEN REQUIREMENTS
 #
 #   * BreezeBlue/Breeze-TTS-2 answers `resolve/main/config.json` with 200 and no
-#     Authorization header, i.e. the model repo is public.
-#   * breezeblue-ai/breeze-tts is public, so the clone needs no credential.
+#     Authorization header, i.e. the model repo is public -- HF_TOKEN is
+#     OPTIONAL.
+#   * breezeblue-ai/breeze-tts is public, so that clone needs no credential.
+#   * camenduru/TostAI-Voice-Studio is PRIVATE, so GITHUB_TOKEN is REQUIRED for
+#     the studio clone below. The mount is marked `required=true` and carries a
+#     `-z` guard, so a build without it fails with a clear message rather than a
+#     git authentication error.
 #
-# They exist for a gated or private mirror, and GITHUB_TOKEN additionally lifts
-# GitHub's anonymous rate limit on a build farm. Both are passed the same way
-# the reference RunPod-style images do it:
+# GITHUB_TOKEN additionally lifts GitHub's anonymous rate limit on a build farm.
+# Both are passed the same way the reference RunPod-style images do it:
 #
 #   docker build \
 #     --secret id=hf_token,env=HF_TOKEN \
@@ -238,26 +241,57 @@ ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
 # ---------------------------------------------------------------------------
-# The studio
+# The studio -- cloned from its own repository
 #
-# `--chown` is load-bearing, not tidiness: `USER camenduru` is set below this
-# point, and the `chown -R` that fixes up /app happened before this COPY -- so
-# without it these files land root:root 644 and the running app could not write
-# beside itself. The reference image hit exactly this: a root-owned COPY turned
-# its update endpoint into a 500 that the UI could not even parse.
+#   https://github.com/camenduru/TostAI-Voice-Studio -> /app/tostai-voice-studio
+#
+# Cloned rather than copied out of the build context, so the image is
+# reproducible from the repository alone. The token goes into the clone URL, so
+# `.git` is removed in THIS SAME RUN and the credentialed URL never reaches a
+# layer. The URL form (x-access-token:<token>@github.com) works for both classic
+# PATs and `gh` OAuth tokens.
+#
+# CACHEBUST IS NOT OPTIONAL IN PRACTICE. BuildKit caches this clone under a key
+# that ignores what the branch points at now, so without the flag a rebuild
+# silently re-serves the first snapshot. Pass `--build-arg CACHEBUST=$(date
+# +%s)`; it invalidates only the clone and the cheap layers after it, so the
+# apt/pip/weights layers stay cached. If the image id does not change after a
+# rebuild, nothing was rebuilt.
+#
+# The resolved commit is written to .tostai_rev so the running app can report
+# what it is (GET /api/update). `docker_selfcheck.py` is copied from the build
+# context rather than taken from the clone, so the build-time proof may be newer
+# than what is committed.
+#
+# `--chown` is load-bearing, not tidiness: `USER camenduru` is set below, and a
+# root-owned COPY turned the reference image's update endpoint into a 500 that
+# the UI could not even parse.
 #
 # outputs/ is created here so the container starts with the folder present even
 # when the app is pointed at BREEZE_OUTPUTS_DIR elsewhere.
 # ---------------------------------------------------------------------------
-WORKDIR /app/breeze-app
-# smoke_modes.py comes along so a running container can be verified in place:
-#   docker exec <id> python /app/breeze-app/smoke_modes.py
+ARG CACHEBUST=0
+
+RUN --mount=type=secret,id=gh_token,env=GITHUB_TOKEN,required=true \
+    set -eu; \
+    if [ -z "${GITHUB_TOKEN:-}" ]; then echo "GITHUB_TOKEN is empty" >&2; exit 1; fi; \
+    git clone --depth 1 \
+      "https://x-access-token:${GITHUB_TOKEN}@github.com/camenduru/TostAI-Voice-Studio.git" \
+      /app/tostai-voice-studio; \
+    git -C /app/tostai-voice-studio rev-parse HEAD > /app/tostai-voice-studio/.tostai_rev; \
+    rm -rf /app/tostai-voice-studio/.git; \
+    test -f /app/tostai-voice-studio/server.py; \
+    echo "cloned camenduru/TostAI-Voice-Studio at $(cat /app/tostai-voice-studio/.tostai_rev)"
+
+COPY --chown=camenduru:camenduru docker_selfcheck.py /app/tostai-voice-studio/docker_selfcheck.py
+
+# smoke_modes.py comes with the clone so a running container can be verified in
+# place:  docker exec <id> python /app/tostai-voice-studio/smoke_modes.py
 # It drives the studio over HTTP and needs no GPU of its own.
-COPY --chown=camenduru:camenduru server.py docker_selfcheck.py docker-entrypoint.sh smoke_modes.py ./
-COPY --chown=camenduru:camenduru static ./static
-RUN chmod +x /app/breeze-app/docker-entrypoint.sh \
-    && mkdir -p /app/breeze-app/outputs \
-    && chown -R camenduru:camenduru /app/breeze-app
+WORKDIR /app/tostai-voice-studio
+RUN chmod +x /app/tostai-voice-studio/docker-entrypoint.sh \
+    && mkdir -p /app/tostai-voice-studio/outputs \
+    && chown -R camenduru:camenduru /app/tostai-voice-studio
 
 USER camenduru
 
@@ -270,7 +304,7 @@ USER camenduru
 # build must not depend on one. The model is exercised on first request
 # instead, which is what the HEALTHCHECK's start-period covers.
 # ---------------------------------------------------------------------------
-RUN /opt/venv/bin/python /app/breeze-app/docker_selfcheck.py
+RUN /opt/venv/bin/python /app/tostai-voice-studio/docker_selfcheck.py
 
 EXPOSE 8000 7860
 
@@ -285,4 +319,4 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=4)"
 
-CMD ["/app/breeze-app/docker-entrypoint.sh"]
+CMD ["/app/tostai-voice-studio/docker-entrypoint.sh"]

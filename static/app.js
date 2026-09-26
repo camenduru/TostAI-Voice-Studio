@@ -980,6 +980,139 @@ async function refreshStatus() {
   }
 }
 
+/* ────────────────────────── update ────────────────────────── */
+
+// Pulls the latest source out of this app's own repository, then restarts the
+// server so the new Python is actually loaded. The token is asked for per update
+// rather than configured: the build's GITHUB_TOKEN is a secret mount and is
+// deliberately absent from the image, and a PAT baked into an image is a PAT
+// that anyone who pulls the image can read.
+const UPDATE_TOKEN_KEY = 'tostai.voice.gh_token';
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+function updateMsg(html) {
+  $('#update-msg').innerHTML = html;
+}
+
+function openUpdate() {
+  $('#update-token').value = '';
+  $('#update-save').checked = false;
+  try {
+    const saved = localStorage.getItem(UPDATE_TOKEN_KEY);
+    if (saved) {
+      $('#update-token').value = saved;
+      $('#update-save').checked = true;
+    }
+  } catch (err) {
+    /* private mode */
+  }
+  updateMsg('');
+  $('#update-go').disabled = false;
+  $('#update-rev').textContent = 'checking the installed revision…';
+  fetch('/api/update')
+    .then((r) => r.json())
+    .then((d) => {
+      $('#update-rev').textContent = d.rev
+        ? `installed ${d.short}${d.subject ? ' — ' + d.subject : ''}`
+        : 'installed revision unknown (this image carries no .tostai_rev)';
+    })
+    .catch(() => {
+      $('#update-rev').textContent = '';
+    });
+  $('#update-dialog').showModal();
+  $('#update-token').focus();
+}
+
+function closeUpdate() {
+  $('#update-dialog').close();
+}
+
+// Wait until the NEW revision is the one answering. Waiting for "any response"
+// is not enough: the re-exec is delayed so the update's own response can flush,
+// so for the first second or so the OLD process still answers, and a naive
+// readiness check would reload straight back into the old code.
+async function waitForRev(rev) {
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const r = await fetch('/api/update', { cache: 'no-store' });
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (d.rev === rev) return true;
+    } catch (err) {
+      /* still down */
+    }
+  }
+  return false;
+}
+
+async function runUpdate() {
+  const token = $('#update-token').value.trim();
+  if (!token) {
+    updateMsg('<div class="err">Enter a GitHub token.</div>');
+    return;
+  }
+  try {
+    if ($('#update-save').checked) localStorage.setItem(UPDATE_TOKEN_KEY, token);
+    else localStorage.removeItem(UPDATE_TOKEN_KEY);
+  } catch (err) {
+    /* private mode */
+  }
+
+  $('#update-go').disabled = true;
+  updateMsg('<div class="hint">Fetching the latest source…</div>');
+  let d;
+  try {
+    const r = await fetch('/api/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    // Read the body as text and parse it here, rather than calling r.json(). A
+    // failure before the handler runs answers with a bare text/plain "Internal
+    // Server Error", and r.json() then throws a parser complaint instead of the
+    // actual cause.
+    const raw = await r.text();
+    try {
+      d = JSON.parse(raw);
+    } catch (err) {
+      d = {
+        ok: false,
+        error: `HTTP ${r.status} from the server: ${raw.slice(0, 400)}`,
+      };
+    }
+  } catch (err) {
+    updateMsg(`<div class="err">${escapeHtml(String(err))}</div>`);
+    $('#update-go').disabled = false;
+    return;
+  }
+  if (!d.ok) {
+    updateMsg(`<div class="err">${escapeHtml(d.error || 'update failed')}</div>`);
+    $('#update-go').disabled = false;
+    return;
+  }
+  if (!d.updated) {
+    updateMsg(`<div class="okbox">Already up to date at ${escapeHtml(d.rev.slice(0, 10))}.</div>`);
+    $('#update-go').disabled = false;
+    return;
+  }
+  updateMsg(
+    `<div class="hint">Updated to ${escapeHtml(d.rev.slice(0, 10))} (${d.files} files). Restarting…</div>`
+  );
+  if (!(await waitForRev(d.rev))) {
+    updateMsg(
+      '<div class="err">The server did not come back on the new revision.\n' +
+        'Check it with:  docker logs tostai-voice-studio</div>'
+    );
+    $('#update-go').disabled = false;
+    return;
+  }
+  location.reload();
+}
+
 /* ────────────────────────── wiring ────────────────────────── */
 
 function wireEvents() {
@@ -1067,6 +1200,10 @@ function wireEvents() {
   $('#theme-toggle').addEventListener('click', toggleTheme);
   $('#facts-button').addEventListener('click', () => $('#facts-dialog').showModal());
   $('#facts-close').addEventListener('click', () => $('#facts-dialog').close());
+  $('#update-button').addEventListener('click', openUpdate);
+  $('#update-close').addEventListener('click', closeUpdate);
+  $('#update-cancel').addEventListener('click', closeUpdate);
+  $('#update-go').addEventListener('click', runUpdate);
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && engine.playing) pauseBuffer();

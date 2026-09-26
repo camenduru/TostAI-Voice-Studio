@@ -35,6 +35,7 @@
     </button>
     <span id="sample-rate-chip" class="chip">24 kHz · mono</span>
     <button id="facts-button" class="chip ghost" type="button">Model facts</button>
+    <button id="update-button" class="chip ghost" type="button">Update</button>
     <button id="theme-toggle" class="chip ghost" type="button">Dark</button>
   </div>
 </header>
@@ -109,7 +110,7 @@
           <small id="cfg-note"></small>
         </div>
         <label class="switch">
-          <input id="stream-toggle" type="checkbox" checked />
+          <input id="stream-toggle" type="checkbox" />
           <span class="track"><span class="thumb"></span></span>
           <span>Stream audio as it is generated</span>
         </label>
@@ -187,6 +188,27 @@
   <button id="facts-close" class="close" type="button" aria-label="Close">✕</button>
   <h2>Breeze TTS 2</h2>
   <div id="facts-body"></div>
+</dialog>
+
+<!-- Update dialog. The token field is the only input: the repository is private
+     and the build-time token is a secret mount that is deliberately not in the
+     image, so there is nothing here to pre-fill it from. -->
+<dialog id="update-dialog" class="facts">
+  <button id="update-close" class="close" type="button" aria-label="Close">✕</button>
+  <h2>Update studio</h2>
+  <div class="hint" id="update-rev"></div>
+  <label for="update-token" class="upd-label">GitHub token</label>
+  <input type="password" id="update-token" autocomplete="off" spellcheck="false"
+         placeholder="ghp_… or github_pat_…" />
+  <div class="hint">Needs read access to the source repository. Sent once to this
+    server, used for the fetch, and never written to disk.</div>
+  <label class="upd-chk"><input type="checkbox" id="update-save" />
+    Remember it in this browser</label>
+  <div id="update-msg" class="upd-msg"></div>
+  <div class="upd-row">
+    <button id="update-cancel" class="ghost" type="button">Cancel</button>
+    <button id="update-go" class="primary" type="button">Update &amp; restart</button>
+  </div>
 </dialog>
 
 <script src="/static/app.js"></script>

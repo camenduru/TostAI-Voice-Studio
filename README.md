@@ -7,7 +7,7 @@ behind one flat, light/dark interface. Every take is written to an output folder
 and listed in the UI.
 
 ```
-breeze-app/
+tostai-voice-studio/
 ├── server.py              FastAPI app: proxies Breeze, muxes WAV, output shelf
 ├── requirements.txt       Web-app dependencies (the model's deps live in ../breeze-tts)
 ├── Dockerfile             self-contained image: clones the code, pulls the weights
@@ -28,7 +28,7 @@ The app has its own virtualenv, so its four dependencies never touch the
 interpreter the model runs on:
 
 ```bash
-cd breeze-app
+cd tostai-voice-studio
 python -m venv .venv                                   # once
 .venv/Scripts/python.exe -m pip install -r requirements.txt   # once (POSIX: .venv/bin/python)
 .venv/Scripts/python.exe server.py --port 8000
@@ -83,7 +83,7 @@ Both themes use the same CSS variable names, so no rule knows which is active:
 
 The choice is made by an inline script in `index.html` **before the first
 paint** — otherwise a dark page flashes the light palette and repaints. A stored
-choice in `localStorage` (`breeze.theme`) wins; with none, the OS decides. The
+choice in `localStorage` (`tostai.voice.theme`) wins; with none, the OS decides. The
 button names the theme it switches *to* ("Dark" on a light page), and the
 canvas visualiser re-reads `--acc` whenever the theme changes, since a canvas
 cannot use CSS variables.
@@ -97,35 +97,45 @@ edit the two variable blocks at the top of `styles.css` and nothing else.
 
 ## Docker
 
-One self-contained image: it clones the inference code and downloads the weights
-during the build, so it needs no local model, and it runs both processes.
+One self-contained image: it clones the inference code, clones the studio from
+its own GitHub repo, and downloads the weights during the build, so it needs no
+local model, and it runs both processes.
 
 ```bash
-cd breeze-app
-docker build -t tostai-voice-studio .
+cd tostai-voice-studio
+docker build --build-arg CACHEBUST=$(date +%s) -t tostai-voice-studio .
 docker run --rm --gpus all -p 8000:8000 tostai-voice-studio
 ```
 
+The studio repository (`camenduru/TostAI-Voice-Studio`) is **private**, so the
+build needs `GITHUB_TOKEN`; the inference and model repos are public, so
+`HF_TOKEN` is optional. See [Configuration](#configuration) for the
+`set -a; . ./.env` step and the token build command.
+
 | | |
 | --- | --- |
-| Code | `git clone https://github.com/breezeblue-ai/breeze-tts` → `/app/breeze-tts` |
+| Inference code | `git clone https://github.com/breezeblue-ai/breeze-tts` → `/app/breeze-tts` |
+| Studio | `git clone https://github.com/camenduru/TostAI-Voice-Studio` → `/app/tostai-voice-studio` |
 | Weights | `BreezeBlue/Breeze-TTS-2` (7.2 GB) → `/app/breeze-tts-2` |
 | Studio ports | 8000 (UI), 7860 (model API, loopback only) |
 | User | `camenduru` (non-root) |
 | Python | `/opt/venv`, a virtualenv, used by both processes |
 
 The build context is **this directory**, not the repo root — `.dockerignore`
-keeps it to about 1 kB by excluding `.venv/`, caches and local audio. Neither
-the code nor the weights come from the context.
+keeps it to about 1 kB by excluding `.venv/`, caches and local audio. The
+studio's files come from the clone, not the context; only `docker_selfcheck.py`
+is copied from the context.
 
 Notes worth knowing before you build:
 
-* **Both repos are public**, so no token is needed. `HF_TOKEN` and
-  `GITHUB_TOKEN` can be supplied as secret mounts for a gated or private mirror
+* **`GITHUB_TOKEN` is required** for the private studio repo. `HF_TOKEN` is
+  optional (the model repo is public). Both are supplied as secret mounts
   (`--secret id=hf_token,env=HF_TOKEN --secret id=gh_token,env=GITHUB_TOKEN`) —
   never as `ARG` or `ENV`, so they stay out of `docker history`.
-  `required=true` is deliberately *not* set, so the public build does not demand
-  flags it does not need.
+* **`CACHEBUST` is not optional in practice.** BuildKit caches the studio clone
+  under a key that ignores what the branch points at now, so without
+  `--build-arg CACHEBUST=$(date +%s)` a rebuild silently re-serves the first
+  snapshot. The flag only invalidates the clone and the cheap layers after it.
 * **No CUDA toolkit is installed.** The pip torch wheels carry their own CUDA
   runtime; only the host driver is required, which is why `--gpus all` is the
   whole GPU story.
@@ -137,22 +147,32 @@ Notes worth knowing before you build:
   `BREEZE_SERVE_MODEL=0` makes the container UI-only, pointing at
   `BREEZE_API_URL` instead.
 
+### Updating a running container
+
+The **Update** button in the header pulls the latest studio source from
+`camenduru/TostAI-Voice-Studio` and restarts the server in place, with no
+rebuild. Type a GitHub token with read access to the repo when the dialog asks;
+it is used for that one fetch and never written to disk. This is a dev
+convenience — the files it writes live in the container and die with it. The
+durable path is still a rebuild.
+
 ## Configuration
 
 `.env` holds **credentials only** — `HF_TOKEN` and `GITHUB_TOKEN` — and nothing
 else. It is gitignored and excluded from the Docker build context, so nothing in
 it is committed or uploaded to the builder.
 
-Both tokens are **optional**: `BreezeBlue/Breeze-TTS-2` and
-`breezeblue-ai/breeze-tts` are public, so a normal build and run need neither.
-They exist for a gated or private mirror, and `GITHUB_TOKEN` also lifts GitHub's
-anonymous clone rate limit.
+`GITHUB_TOKEN` is **required**: `camenduru/TostAI-Voice-Studio` is private, so
+the Dockerfile clones it with that token. `HF_TOKEN` is **optional**:
+`BreezeBlue/Breeze-TTS-2` and `breezeblue-ai/breeze-tts` are public, so they need
+no credential. `GITHUB_TOKEN` also lifts GitHub's anonymous clone rate limit.
 
 ```bash
 set -a; . ./.env; set +a        # `set -a` is required: it marks values for export
 docker build \
   --secret id=hf_token,env=HF_TOKEN \
   --secret id=gh_token,env=GITHUB_TOKEN \
+  --build-arg CACHEBUST=$(date +%s) \
   -t tostai-voice-studio .
 ```
 
@@ -173,6 +193,7 @@ belong in your shell or in `docker run -e` rather than in a credentials file:
 | `BREEZE_MODEL_PORT` | `7860` | Model server port (inside the container) |
 | `BREEZE_STUDIO_PORT` | `8000` | UI port |
 | `BREEZE_REV` | `main` | Checkpoint revision baked into the image (build-time) |
+| `TOSTAI_APP_REPO` | `camenduru/TostAI-Voice-Studio` | Repo the studio's Update button pulls from |
 
 An **empty** value is treated as unset by the studio, so `BREEZE_OUTPUTS_DIR=`
 keeps the default folder.
@@ -189,6 +210,8 @@ keeps the default folder.
 | `GET` | `/api/outputs` | Every saved take, newest first, with its metadata |
 | `GET` | `/api/outputs/{name}` | One saved take as a WAV |
 | `DELETE` | `/api/outputs/{name}` | Remove a take (audio + sidecar) |
+| `GET` | `/api/update` | The installed studio revision (for the Update dialog) |
+| `POST` | `/api/update` | Pull latest source with a GitHub token, then restart |
 
 Both POST endpoints accept `text`, `instruction`, `cfg_scale`, `seed`,
 `ref_text`, `lang` and an optional `ref_audio` file, mirroring
@@ -206,10 +229,11 @@ Both POST endpoints accept `text`, `instruction`, `cfg_scale`, `seed`,
 | **Bilingual EN / 中文** | Language toggle swaps examples, placeholders and event set |
 | **Seed control** | Advanced panel, with randomiser |
 | **CFG scale** | Advanced panel — locked to 1.0 for templates Breeze has no negative prompt for |
-| **Real-time streaming PCM** | "Stream audio as it is generated" — chunk-by-chunk Web Audio playback |
-| **Buffered WAV export** | Turn streaming off, or use the WAV/PCM buttons and the shelf |
+| **Real-time streaming PCM** | "Stream audio as it is generated" — off by default; enable for chunk-by-chunk Web Audio playback |
+| **Buffered WAV export** | The default: streaming off returns one WAV, or use the WAV/PCM buttons and the shelf |
 | **Fast-path flags** | Listed with each stage so you know what to pass to `breeze_infer.api` |
 | **Model facts** | Header → *Model facts* (sample rate, format, GPU memory, TTFA, RTF, licence) |
+| **In-place update** | Header → *Update* — pulls latest source with a GitHub token and restarts |
 
 Also: latency stats (time to first audio, total, real-time factor), an audio
 visualiser, a reference-waveform preview, a light/dark theme, and a shelf of

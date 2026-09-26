@@ -22,9 +22,17 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
+import subprocess
 import sys
+import tarfile
+import tempfile
+import threading
 import time
+import traceback
+import urllib.error
+import urllib.request
 from array import array
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -32,7 +40,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -843,6 +851,244 @@ async def delete_output(name: str) -> JSONResponse:
     path.unlink()
     path.with_suffix(".json").unlink(missing_ok=True)
     return JSONResponse({"deleted": name})
+
+
+# --------------------------------------------------------------------------- #
+# self-update: pull the latest source from this app's own repo, then restart
+# --------------------------------------------------------------------------- #
+#
+# Why a token is typed in rather than configured: the build's GITHUB_TOKEN is a
+# secret MOUNT, so it is deliberately gone by the time this code runs, and the
+# repo is private. Baking a PAT into the image would hand it to anyone who pulls
+# the image. Asking for it per-update keeps it in memory for one request.
+#
+# Why the files are copied over the live tree rather than the container being
+# rebuilt: this is a dev convenience -- click, get latest, keep working. It is
+# explicitly NOT durable. The installed source lives in the container and dies
+# with it; a rebuild replaces it. The durable path is still a rebuild.
+#
+# Why the restart is a re-exec: `index.html`/`app.js` are re-read per request,
+# but `server.py` is Python held in memory, so new code on disk is invisible
+# until the process restarts. `os.execv` replaces the process image in place,
+# which keeps the same PID 1 and the same container -- a plain `sys.exit` would
+# stop the container instead (the default restart policy is `no`).
+
+APP_REPO = os.environ.get("TOSTAI_APP_REPO", "camenduru/TostAI-Voice-Studio")
+APP_REV_FILE = APP_DIR / ".tostai_rev"
+UPDATE_BACKUP = APP_DIR / ".update_backup"
+
+# Never overwritten by an update. `outputs/` is this container's own state and
+# is gitignored upstream, so it should never appear in the tarball at all --
+# this is belt and braces, because the cost of being wrong is somebody's take.
+# `.update_backup` is excluded so a backup never contains itself.
+UPDATE_KEEP = ("outputs", ".update_backup", ".git", "__pycache__")
+
+_UA = {"User-Agent": "tostai-voice-studio-update",
+       "Accept": "application/vnd.github+json"}
+
+
+def _gh_json(url: str, token: str) -> tuple[Any, str | None]:
+    """GET a GitHub API URL. Returns (data, None) or (None, human_error)."""
+    req = urllib.request.Request(
+        url, headers=dict(_UA, Authorization="Bearer " + token))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8")), None
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return None, ("GitHub rejected the token (401). It may have expired, "
+                          "or lack `repo` scope for a private repository.")
+        if e.code == 404:
+            return None, ("GitHub returned 404 for %s. Either the repository name "
+                          "is wrong, or the token cannot see it -- a private repo "
+                          "404s rather than 403s for an unauthorised token." % url)
+        if e.code == 403:
+            return None, ("GitHub returned 403 (rate limit or blocked). If the "
+                          "token is a fine-grained PAT it needs Contents: read.")
+        return None, "GitHub returned HTTP %d." % e.code
+    except Exception as ex:                                     # noqa: BLE001
+        return None, "%s: %s" % (type(ex).__name__, ex)
+
+
+def _current_rev() -> str:
+    try:
+        return APP_REV_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _restart_soon(delay: float = 1.5) -> None:
+    """Replace this process with a fresh one, once the response has flushed.
+
+    The delay is load-bearing: both paths below tear the server down, so doing it
+    before the response is written turns a successful update into a network error
+    on the user's screen.
+    """
+    def _go() -> None:
+        time.sleep(delay)
+        argv = [sys.executable, os.path.abspath(__file__)] + sys.argv[1:]
+        try:
+            if os.name == "nt":
+                # Windows: os.execv is NOT usable from here. Measured in
+                # sprite_studio and reproducible in isolation -- a uvicorn server
+                # that execv's itself from a background thread dies outright: the
+                # in-flight response is cut off mid-body, no replacement process is
+                # ever started, and the port goes dead. So spawn a detached
+                # replacement and leave; exiting is safe because there is no PID 1
+                # to keep alive.
+                flags = (subprocess.DETACHED_PROCESS
+                         | subprocess.CREATE_NEW_PROCESS_GROUP)
+                subprocess.Popen(argv, cwd=str(APP_DIR), close_fds=True,
+                                 creationflags=flags)
+                os._exit(0)
+            else:
+                # POSIX, and specifically a container: execve(2) swaps the image
+                # inside the SAME pid, so PID 1 stays PID 1 and the container is
+                # not stopped. Exiting would end the container, and the default
+                # restart policy is `no`.
+                os.execv(sys.executable, argv)
+        except Exception:                                       # noqa: BLE001
+            # Restart failed, so this process is still serving the OLD code. Say
+            # so rather than exiting: a stopped container is worse than a stale one
+            # that still works.
+            traceback.print_exc()
+    threading.Thread(target=_go, daemon=True, name="tostai-restart").start()
+
+
+# The commit subject the running process started from. Set on a successful POST
+# and read by the GET below, so the dialog can name what is installed rather
+# than only its hash.
+_rev_subject = ""
+
+
+@app.get("/api/update")
+async def update_status() -> JSONResponse:
+    """What is installed, so the dialog can say so before anything is typed."""
+    rev = _current_rev()
+    return JSONResponse({"ok": True, "repo": APP_REPO, "rev": rev, "short": rev[:10],
+                         "subject": _rev_subject})
+
+
+@app.post("/api/update")
+async def update_apply(req: Request) -> JSONResponse:
+    global _rev_subject
+    body = await req.json() or {}
+    token = (body.get("token") or "").strip()
+    if not token:
+        return JSONResponse({"ok": False, "error": "no GitHub token given"},
+                            status_code=400)
+
+    # 1. What is upstream right now?
+    commits, err = _gh_json(
+        "https://api.github.com/repos/%s/commits?per_page=1" % APP_REPO, token)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    if not commits:
+        return JSONResponse({"ok": False, "error": "the repository has no commits"},
+                            status_code=400)
+    latest = commits[0]["sha"]
+    subject = (commits[0].get("commit", {}).get("message") or "").splitlines()[0]
+    current = _current_rev()
+
+    if latest == current:
+        _rev_subject = subject
+        return JSONResponse({"ok": True, "updated": False, "rev": latest,
+                             "subject": subject,
+                             "message": "already up to date at %s" % latest[:10]})
+
+    tmp = tempfile.mkdtemp(prefix="tostai_update_")
+    try:
+        # 2. Fetch that exact tree. The API redirects to codeload with a signed
+        #    token in the URL, so the redirect is followed without the header.
+        tarball = os.path.join(tmp, "src.tar.gz")
+        dl = urllib.request.Request(
+            "https://api.github.com/repos/%s/tarball/%s" % (APP_REPO, latest),
+            headers=dict(_UA, Authorization="Bearer " + token))
+        try:
+            with urllib.request.urlopen(dl, timeout=180) as r, \
+                    open(tarball, "wb") as f:
+                shutil.copyfileobj(r, f)
+        except Exception as ex:                                 # noqa: BLE001
+            return JSONResponse({"ok": False, "error": "download failed: %s: %s"
+                                 % (type(ex).__name__, ex)}, status_code=400)
+
+        root = os.path.join(tmp, "x")
+        os.makedirs(root)
+        with tarfile.open(tarball, "r:gz") as tf:
+            try:
+                tf.extractall(root, filter="data")              # py3.12+
+            except TypeError:
+                tf.extractall(root)                             # py3.10/3.11
+
+        # GitHub wraps the tree in a single <owner>-<repo>-<shortsha> directory.
+        entries = sorted(e for e in os.listdir(root) if not e.startswith("."))
+        if len(entries) != 1 or not os.path.isdir(os.path.join(root, entries[0])):
+            return JSONResponse({"ok": False, "error":
+                                 "unexpected tarball layout: %r" % entries},
+                                status_code=400)
+        src = os.path.join(root, entries[0])
+
+        if not os.path.isfile(os.path.join(src, "server.py")):
+            return JSONResponse({"ok": False, "error":
+                                 "refusing to install: the new tree has no server.py"},
+                                status_code=400)
+
+        # 3. Parse every new .py BEFORE anything is swapped in. A file that fails
+        #    to parse would be re-exec'd into a container that never comes back,
+        #    and the default restart policy is `no`.
+        bad = []
+        for dirpath, dirnames, filenames in os.walk(src):
+            dirnames[:] = [d for d in dirnames if d not in UPDATE_KEEP]
+            for fn in filenames:
+                if not fn.endswith(".py"):
+                    continue
+                p = os.path.join(dirpath, fn)
+                try:
+                    with open(p, "rb") as fh:
+                        compile(fh.read(), p, "exec")
+                except SyntaxError as ex:
+                    bad.append("%s: line %s: %s" % (os.path.relpath(p, src),
+                                                    ex.lineno, ex.msg))
+                except (OSError, ValueError) as ex:
+                    bad.append("%s: %s" % (os.path.relpath(p, src), ex))
+        if bad:
+            return JSONResponse({"ok": False, "error":
+                                 "refusing to install -- the new source does not "
+                                 "compile:\n" + "\n".join(bad[:10])},
+                                status_code=400)
+
+        # 4. Back up the current tree, then copy the new one over it. Copy, not
+        #    replace, so files deleted upstream linger harmlessly rather than
+        #    `outputs/` being swept away with them.
+        if UPDATE_BACKUP.is_dir():
+            shutil.rmtree(UPDATE_BACKUP, ignore_errors=True)
+        try:
+            shutil.copytree(APP_DIR, UPDATE_BACKUP,
+                            ignore=shutil.ignore_patterns(*UPDATE_KEEP))
+        except Exception as ex:                                 # noqa: BLE001
+            return JSONResponse({"ok": False, "error":
+                                 "could not write a backup, so nothing was "
+                                 "changed: %s" % ex}, status_code=400)
+
+        copied = 0
+        for dirpath, dirnames, filenames in os.walk(src):
+            dirnames[:] = [d for d in dirnames if d not in UPDATE_KEEP]
+            rel = os.path.relpath(dirpath, src)
+            dst_dir = APP_DIR if rel == "." else APP_DIR / rel
+            os.makedirs(dst_dir, exist_ok=True)
+            for fn in filenames:
+                shutil.copy2(os.path.join(dirpath, fn), os.path.join(dst_dir, fn))
+                copied += 1
+
+        APP_REV_FILE.write_text(latest + "\n", encoding="utf-8")
+        _rev_subject = subject
+
+        _restart_soon()
+        return JSONResponse({"ok": True, "updated": True, "rev": latest,
+                             "subject": subject, "files": copied,
+                             "message": "updated to %s, restarting" % latest[:10]})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> None:

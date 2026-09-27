@@ -11,9 +11,9 @@
 # studio itself is cloned from its own GitHub repository. The build context
 # supplies only docker_selfcheck.py.
 #
-#   docker build -t tostai-voice-studio .
+#   docker build -t camenduru/tostai-voice-studio .
 #
-#   docker run --rm --gpus all -p 8000:8000 tostai-voice-studio
+#   docker run --rm --gpus all -p 8000:8000 camenduru/tostai-voice-studio
 #
 # then open http://127.0.0.1:8000.
 #
@@ -53,7 +53,7 @@
 #   docker build \
 #     --secret id=hf_token,env=HF_TOKEN \
 #     --secret id=gh_token,env=GITHUB_TOKEN \
-#     -t tostai-voice-studio .
+#     -t camenduru/tostai-voice-studio .
 #
 # Docker reads neither your shell environment nor `.env` on its own: the
 # `env=NAME` on each `--secret` is what lifts the value out of the process
@@ -107,6 +107,12 @@
 # ===========================================================================
 FROM ubuntu:22.04
 
+LABEL org.opencontainers.image.title="TostAI Voice Studio" \
+      org.opencontainers.image.description="Web app for Breeze TTS 2: voice design, clone, direction, plain TTS, bilingual EN/ZH, streaming." \
+      org.opencontainers.image.source="https://github.com/camenduru/TostAI-Voice-Studio" \
+      org.opencontainers.image.url="https://hub.docker.com/r/camenduru/tostai-voice-studio" \
+      org.opencontainers.image.documentation="https://github.com/camenduru/TostAI-Voice-Studio#docker"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=True \
     PYTHONDONTWRITEBYTECODE=True
@@ -135,7 +141,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # Both the model server and the studio run out of /opt/venv/bin, and PATH is
 # set once here so nothing downstream has to remember. Keeping it out of the
-# system interpreter also means `docker run --rm tostai-voice-studio python ...` gets
+# system interpreter also means `docker run --rm camenduru/tostai-voice-studio python ...` gets
 # the same environment the entrypoint does.
 # ---------------------------------------------------------------------------
 RUN python3 -m venv /opt/venv \

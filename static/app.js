@@ -1105,7 +1105,7 @@ async function runUpdate() {
   if (!(await waitForRev(d.rev))) {
     updateMsg(
       '<div class="err">The server did not come back on the new revision.\n' +
-        'Check it with:  docker logs tostai-voice-studio</div>'
+        'Check it with:  docker logs <container></div>'
     );
     $('#update-go').disabled = false;
     return;

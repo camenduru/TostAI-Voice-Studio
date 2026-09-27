@@ -97,14 +97,23 @@ edit the two variable blocks at the top of `styles.css` and nothing else.
 
 ## Docker
 
+Pull the published image — no build, no model download, no tokens:
+
+```bash
+docker pull camenduru/tostai-voice-studio
+docker run --rm --gpus all -p 8000:8000 camenduru/tostai-voice-studio
+```
+
+then open <http://127.0.0.1:8000>.
+
 One self-contained image: it clones the inference code, clones the studio from
 its own GitHub repo, and downloads the weights during the build, so it needs no
-local model, and it runs both processes.
+local model, and it runs both processes. To build it yourself:
 
 ```bash
 cd tostai-voice-studio
-docker build --build-arg CACHEBUST=$(date +%s) -t tostai-voice-studio .
-docker run --rm --gpus all -p 8000:8000 tostai-voice-studio
+docker build --build-arg CACHEBUST=$(date +%s) -t camenduru/tostai-voice-studio .
+docker run --rm --gpus all -p 8000:8000 camenduru/tostai-voice-studio
 ```
 
 The studio repository (`camenduru/TostAI-Voice-Studio`) is **private**, so the
@@ -173,7 +182,22 @@ docker build \
   --secret id=hf_token,env=HF_TOKEN \
   --secret id=gh_token,env=GITHUB_TOKEN \
   --build-arg CACHEBUST=$(date +%s) \
-  -t tostai-voice-studio .
+  -t camenduru/tostai-voice-studio .
+```
+
+### Publishing to Docker Hub (`camenduru/tostai-voice-studio`)
+
+```bash
+docker login
+docker build \
+  --secret id=hf_token,env=HF_TOKEN \
+  --secret id=gh_token,env=GITHUB_TOKEN \
+  --build-arg CACHEBUST=$(date +%s) \
+  -t camenduru/tostai-voice-studio:latest .
+docker push camenduru/tostai-voice-studio:latest
+# optional version tag:
+# docker tag camenduru/tostai-voice-studio:latest camenduru/tostai-voice-studio:<version>
+# docker push camenduru/tostai-voice-studio:<version>
 ```
 
 The tokens arrive as secret mounts, never as `ARG` or `ENV`, so they stay out of

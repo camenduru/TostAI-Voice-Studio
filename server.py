@@ -857,10 +857,11 @@ async def delete_output(name: str) -> JSONResponse:
 # self-update: pull the latest source from this app's own repo, then restart
 # --------------------------------------------------------------------------- #
 #
-# Why a token is typed in rather than configured: the build's GITHUB_TOKEN is a
-# secret MOUNT, so it is deliberately gone by the time this code runs, and the
-# repo is private. Baking a PAT into the image would hand it to anyone who pulls
-# the image. Asking for it per-update keeps it in memory for one request.
+# The source repository is public, so the update needs no credential: the
+# commits URL and the tarball URL below both answer without authorization.
+# A per-request "token" field is still accepted and, when supplied, sent as a
+# Bearer header -- it only lifts the anonymous GitHub rate limit on a busy
+# network. Nothing is ever written to disk.
 #
 # Why the files are copied over the live tree rather than the container being
 # rebuilt: this is a dev convenience -- click, get latest, keep working. It is
@@ -887,24 +888,24 @@ _UA = {"User-Agent": "tostai-voice-studio-update",
        "Accept": "application/vnd.github+json"}
 
 
-def _gh_json(url: str, token: str) -> tuple[Any, str | None]:
+def _gh_json(url: str, token: str | None = None) -> tuple[Any, str | None]:
     """GET a GitHub API URL. Returns (data, None) or (None, human_error)."""
-    req = urllib.request.Request(
-        url, headers=dict(_UA, Authorization="Bearer " + token))
+    headers = dict(_UA)
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8")), None
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            return None, ("GitHub rejected the token (401). It may have expired, "
-                          "or lack `repo` scope for a private repository.")
+            return None, ("GitHub rejected the token (401). It may have expired.")
         if e.code == 404:
             return None, ("GitHub returned 404 for %s. Either the repository name "
-                          "is wrong, or the token cannot see it -- a private repo "
-                          "404s rather than 403s for an unauthorised token." % url)
+                          "is wrong, or the repository is unavailable." % url)
         if e.code == 403:
-            return None, ("GitHub returned 403 (rate limit or blocked). If the "
-                          "token is a fine-grained PAT it needs Contents: read.")
+            return None, ("GitHub returned 403 (rate limit or blocked). "
+                          "Try again later.")
         return None, "GitHub returned HTTP %d." % e.code
     except Exception as ex:                                     # noqa: BLE001
         return None, "%s: %s" % (type(ex).__name__, ex)
@@ -972,11 +973,11 @@ async def update_status() -> JSONResponse:
 @app.post("/api/update")
 async def update_apply(req: Request) -> JSONResponse:
     global _rev_subject
-    body = await req.json() or {}
-    token = (body.get("token") or "").strip()
-    if not token:
-        return JSONResponse({"ok": False, "error": "no GitHub token given"},
-                            status_code=400)
+    try:
+        body = await req.json()
+    except Exception:                                           # noqa: BLE001
+        body = {}
+    token = ((body or {}).get("token") or "").strip() or None
 
     # 1. What is upstream right now?
     commits, err = _gh_json(
@@ -998,12 +999,14 @@ async def update_apply(req: Request) -> JSONResponse:
 
     tmp = tempfile.mkdtemp(prefix="tostai_update_")
     try:
-        # 2. Fetch that exact tree. The API redirects to codeload with a signed
-        #    token in the URL, so the redirect is followed without the header.
+        # 2. Fetch that exact tree. The repo is public, so the tarball URL
+        #    needs no Authorization header -- and none is sent, so a caller
+        #    supplied token (rate-limit relief for the API call above) can
+        #    never leak to the redirect host.
         tarball = os.path.join(tmp, "src.tar.gz")
         dl = urllib.request.Request(
             "https://api.github.com/repos/%s/tarball/%s" % (APP_REPO, latest),
-            headers=dict(_UA, Authorization="Bearer " + token))
+            headers=dict(_UA))
         try:
             with urllib.request.urlopen(dl, timeout=180) as r, \
                     open(tarball, "wb") as f:

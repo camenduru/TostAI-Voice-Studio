@@ -38,28 +38,24 @@
 # ---------------------------------------------------------------------------
 # TOKEN REQUIREMENTS
 #
-#   * BreezeBlue/Breeze-TTS-2 answers `resolve/main/config.json` with 200 and no
-#     Authorization header, i.e. the model repo is public -- HF_TOKEN is
-#     OPTIONAL.
-#   * breezeblue-ai/breeze-tts is public, so that clone needs no credential.
-#   * camenduru/TostAI-Voice-Studio is PRIVATE, so GITHUB_TOKEN is REQUIRED for
-#     the studio clone below. The mount is marked `required=true` and carries a
-#     `-z` guard, so a build without it fails with a clear message rather than a
-#     git authentication error.
+# There are none: every GitHub repository this build reads is public, and so
+# is the HuggingFace model repo. Anonymous `git clone` and an unauthenticated
+# `snapshot_download` are all it needs.
 #
-# GITHUB_TOKEN additionally lifts GitHub's anonymous rate limit on a build farm.
-# Both are passed the same way the reference RunPod-style images do it:
+# HF_TOKEN is still ACCEPTED as an optional secret mount: it lifts the
+# HuggingFace rate limit on a busy build farm and unlocks a gated mirror, if
+# you ever point BREEZE_REV at one. It is passed the same way the reference
+# RunPod-style images do it:
 #
 #   docker build \
 #     --secret id=hf_token,env=HF_TOKEN \
-#     --secret id=gh_token,env=GITHUB_TOKEN \
 #     -t camenduru/tostai-voice-studio .
 #
 # Docker reads neither your shell environment nor `.env` on its own: the
 # `env=NAME` on each `--secret` is what lifts the value out of the process
 # environment the build is running in. That is why this directory ships a
-# gitignored `.env` holding nothing but these two tokens, each guarded as
-# NAME=${NAME:-} so a value already in your environment wins:
+# gitignored `.env` holding the optional token, guarded as NAME=${NAME:-} so
+# a value already in your environment wins:
 #
 #   set -a; . ./.env; set +a
 #
@@ -71,10 +67,6 @@
 # `--mount=type=secret,...,env=NAME` exposes it to that ONE RUN. It is NOT an
 # ARG and NOT an ENV, so it never reaches `docker history` or `.Config.Env`,
 # and it is gone from the next layer. Nothing is written to disk.
-#
-# `required=true` is deliberately NOT set: it would abort every build that does
-# not pass the flag, including the public one that needs no token. The
-# `-z` guard inside the RUN covers the other case -- flag passed, value empty.
 #
 # ---------------------------------------------------------------------------
 # NO CUDA TOOLKIT, AND WHY THAT IS FINE
@@ -159,21 +151,10 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 # Placed above the torch install so that a change to the code does not force a
 # ~2.5 GB torch re-download: this layer is a few MB and rebuilds in seconds.
 # ---------------------------------------------------------------------------
-# The token, when supplied, goes into the clone's remote URL rather than an
-# extraheader -- and `.git` is removed in THIS SAME RUN, so the credentialed URL
-# never reaches a layer. The instruction text in `docker history` shows the
-# shell variable, not the value, because the value arrives from the secret mount
-# at build time and is never interpolated by the Dockerfile parser.
-RUN --mount=type=secret,id=gh_token,env=GITHUB_TOKEN \
-    set -eu; \
-    if [ -n "${GITHUB_TOKEN:-}" ]; then \
-        echo "cloning with a GITHUB_TOKEN"; \
-        url="https://x-access-token:${GITHUB_TOKEN}@github.com/breezeblue-ai/breeze-tts.git"; \
-    else \
-        echo "cloning anonymously (the repo is public)"; \
-        url="https://github.com/breezeblue-ai/breeze-tts.git"; \
-    fi; \
-    git clone --depth 1 "$url" /app/breeze-tts; \
+# All three source repositories are public, so every clone below is
+# anonymous: no credential, no secret mount, nothing to leak into a layer.
+RUN set -eu; \
+    git clone --depth 1 https://github.com/breezeblue-ai/breeze-tts.git /app/breeze-tts; \
     rm -rf /app/breeze-tts/.git; \
     test -f /app/breeze-tts/breeze_infer/api.py
 
@@ -252,10 +233,8 @@ ENV HF_HUB_OFFLINE=1 \
 #   https://github.com/camenduru/TostAI-Voice-Studio -> /app/tostai-voice-studio
 #
 # Cloned rather than copied out of the build context, so the image is
-# reproducible from the repository alone. The token goes into the clone URL, so
-# `.git` is removed in THIS SAME RUN and the credentialed URL never reaches a
-# layer. The URL form (x-access-token:<token>@github.com) works for both classic
-# PATs and `gh` OAuth tokens.
+# reproducible from the repository alone. The repo is public, so the clone is
+# anonymous.
 #
 # CACHEBUST IS NOT OPTIONAL IN PRACTICE. BuildKit caches this clone under a key
 # that ignores what the branch points at now, so without the flag a rebuild
@@ -278,11 +257,9 @@ ENV HF_HUB_OFFLINE=1 \
 # ---------------------------------------------------------------------------
 ARG CACHEBUST=0
 
-RUN --mount=type=secret,id=gh_token,env=GITHUB_TOKEN,required=true \
-    set -eu; \
-    if [ -z "${GITHUB_TOKEN:-}" ]; then echo "GITHUB_TOKEN is empty" >&2; exit 1; fi; \
+RUN set -eu; \
     git clone --depth 1 \
-      "https://x-access-token:${GITHUB_TOKEN}@github.com/camenduru/TostAI-Voice-Studio.git" \
+      https://github.com/camenduru/TostAI-Voice-Studio.git \
       /app/tostai-voice-studio; \
     git -C /app/tostai-voice-studio rev-parse HEAD > /app/tostai-voice-studio/.tostai_rev; \
     rm -rf /app/tostai-voice-studio/.git; \

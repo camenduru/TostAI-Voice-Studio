@@ -983,11 +983,8 @@ async function refreshStatus() {
 /* ────────────────────────── update ────────────────────────── */
 
 // Pulls the latest source out of this app's own repository, then restarts the
-// server so the new Python is actually loaded. The token is asked for per update
-// rather than configured: the build's GITHUB_TOKEN is a secret mount and is
-// deliberately absent from the image, and a PAT baked into an image is a PAT
-// that anyone who pulls the image can read.
-const UPDATE_TOKEN_KEY = 'tostai.voice.gh_token';
+// server so the new Python is actually loaded. The repository is public, so
+// the update needs no credential -- the button just fetches.
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -998,17 +995,6 @@ function updateMsg(html) {
 }
 
 function openUpdate() {
-  $('#update-token').value = '';
-  $('#update-save').checked = false;
-  try {
-    const saved = localStorage.getItem(UPDATE_TOKEN_KEY);
-    if (saved) {
-      $('#update-token').value = saved;
-      $('#update-save').checked = true;
-    }
-  } catch (err) {
-    /* private mode */
-  }
   updateMsg('');
   $('#update-go').disabled = false;
   $('#update-rev').textContent = 'checking the installed revision…';
@@ -1023,7 +1009,7 @@ function openUpdate() {
       $('#update-rev').textContent = '';
     });
   $('#update-dialog').showModal();
-  $('#update-token').focus();
+  $('#update-go').focus();
 }
 
 function closeUpdate() {
@@ -1050,18 +1036,6 @@ async function waitForRev(rev) {
 }
 
 async function runUpdate() {
-  const token = $('#update-token').value.trim();
-  if (!token) {
-    updateMsg('<div class="err">Enter a GitHub token.</div>');
-    return;
-  }
-  try {
-    if ($('#update-save').checked) localStorage.setItem(UPDATE_TOKEN_KEY, token);
-    else localStorage.removeItem(UPDATE_TOKEN_KEY);
-  } catch (err) {
-    /* private mode */
-  }
-
   $('#update-go').disabled = true;
   updateMsg('<div class="hint">Fetching the latest source…</div>');
   let d;
@@ -1069,7 +1043,7 @@ async function runUpdate() {
     const r = await fetch('/api/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({}),
     });
     // Read the body as text and parse it here, rather than calling r.json(). A
     // failure before the handler runs answers with a bare text/plain "Internal

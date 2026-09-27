@@ -116,10 +116,10 @@ docker build --build-arg CACHEBUST=$(date +%s) -t camenduru/tostai-voice-studio 
 docker run --rm --gpus all -p 8000:8000 camenduru/tostai-voice-studio
 ```
 
-The studio repository (`camenduru/TostAI-Voice-Studio`) is **private**, so the
-build needs `GITHUB_TOKEN`; the inference and model repos are public, so
-`HF_TOKEN` is optional. See [Configuration](#configuration) for the
-`set -a; . ./.env` step and the token build command.
+All three source repositories are public, so the build needs no credentials.
+`HF_TOKEN` is accepted as an optional secret mount (lifts the HuggingFace rate
+limit on a busy build farm). See [Configuration](#configuration) for the
+`set -a; . ./.env` step.
 
 | | |
 | --- | --- |
@@ -137,10 +137,11 @@ is copied from the context.
 
 Notes worth knowing before you build:
 
-* **`GITHUB_TOKEN` is required** for the private studio repo. `HF_TOKEN` is
-  optional (the model repo is public). Both are supplied as secret mounts
-  (`--secret id=hf_token,env=HF_TOKEN --secret id=gh_token,env=GITHUB_TOKEN`) —
-  never as `ARG` or `ENV`, so they stay out of `docker history`.
+* **No credentials needed.** Every repository this build reads is public, so
+  plain `git clone` and an unauthenticated weight download are all it takes.
+  `HF_TOKEN` is optional (lifts the HuggingFace rate limit); when supplied it
+  arrives as a secret mount (`--secret id=hf_token,env=HF_TOKEN`) — never as
+  `ARG` or `ENV`, so it stays out of `docker history`.
 * **`CACHEBUST` is not optional in practice.** BuildKit caches the studio clone
   under a key that ignores what the branch points at now, so without
   `--build-arg CACHEBUST=$(date +%s)` a rebuild silently re-serves the first
@@ -160,29 +161,32 @@ Notes worth knowing before you build:
 
 The **Update** button in the header pulls the latest studio source from
 `camenduru/TostAI-Voice-Studio` and restarts the server in place, with no
-rebuild. Type a GitHub token with read access to the repo when the dialog asks;
-it is used for that one fetch and never written to disk. This is a dev
+rebuild and no token — the repository is public. This is a dev
 convenience — the files it writes live in the container and die with it. The
 durable path is still a rebuild.
 
 ## Configuration
 
-`.env` holds **credentials only** — `HF_TOKEN` and `GITHUB_TOKEN` — and nothing
+`.env` holds one **optional credential** — `HF_TOKEN` — and nothing
 else. It is gitignored and excluded from the Docker build context, so nothing in
 it is committed or uploaded to the builder.
 
-`GITHUB_TOKEN` is **required**: `camenduru/TostAI-Voice-Studio` is private, so
-the Dockerfile clones it with that token. `HF_TOKEN` is **optional**:
-`BreezeBlue/Breeze-TTS-2` and `breezeblue-ai/breeze-tts` are public, so they need
-no credential. `GITHUB_TOKEN` also lifts GitHub's anonymous clone rate limit.
+Every repository this build reads is public, so no credential is required.
+`HF_TOKEN` only lifts the HuggingFace rate limit on a busy build farm (or
+unlocks a gated mirror, if you ever point `BREEZE_REV` at one).
 
 ```bash
 set -a; . ./.env; set +a        # `set -a` is required: it marks values for export
 docker build \
   --secret id=hf_token,env=HF_TOKEN \
-  --secret id=gh_token,env=GITHUB_TOKEN \
   --build-arg CACHEBUST=$(date +%s) \
   -t camenduru/tostai-voice-studio .
+```
+
+Or skip the secret entirely — a plain build works:
+
+```bash
+docker build --build-arg CACHEBUST=$(date +%s) -t camenduru/tostai-voice-studio .
 ```
 
 ### Publishing to Docker Hub (`camenduru/tostai-voice-studio`)
@@ -191,7 +195,6 @@ docker build \
 docker login
 docker build \
   --secret id=hf_token,env=HF_TOKEN \
-  --secret id=gh_token,env=GITHUB_TOKEN \
   --build-arg CACHEBUST=$(date +%s) \
   -t camenduru/tostai-voice-studio:latest .
 docker push camenduru/tostai-voice-studio:latest
@@ -200,7 +203,7 @@ docker push camenduru/tostai-voice-studio:latest
 # docker push camenduru/tostai-voice-studio:<version>
 ```
 
-The tokens arrive as secret mounts, never as `ARG` or `ENV`, so they stay out of
+The token arrives as a secret mount, never as `ARG` or `ENV`, so it stays out of
 `docker history` and the image config. Each assignment is guarded as
 `NAME=${NAME:-}`, so a value already in your environment wins — keep the guard
 if you edit the file.
@@ -235,7 +238,7 @@ keeps the default folder.
 | `GET` | `/api/outputs/{name}` | One saved take as a WAV |
 | `DELETE` | `/api/outputs/{name}` | Remove a take (audio + sidecar) |
 | `GET` | `/api/update` | The installed studio revision (for the Update dialog) |
-| `POST` | `/api/update` | Pull latest source with a GitHub token, then restart |
+| `POST` | `/api/update` | Pull latest source, then restart |
 
 Both POST endpoints accept `text`, `instruction`, `cfg_scale`, `seed`,
 `ref_text`, `lang` and an optional `ref_audio` file, mirroring
@@ -257,7 +260,7 @@ Both POST endpoints accept `text`, `instruction`, `cfg_scale`, `seed`,
 | **Buffered WAV export** | The default: streaming off returns one WAV, or use the WAV/PCM buttons and the shelf |
 | **Fast-path flags** | Listed with each stage so you know what to pass to `breeze_infer.api` |
 | **Model facts** | Header → *Model facts* (sample rate, format, GPU memory, TTFA, RTF, licence) |
-| **In-place update** | Header → *Update* — pulls latest source with a GitHub token and restarts |
+| **In-place update** | Header → *Update* — pulls latest source and restarts |
 
 Also: latency stats (time to first audio, total, real-time factor), an audio
 visualiser, a reference-waveform preview, a light/dark theme, and a shelf of

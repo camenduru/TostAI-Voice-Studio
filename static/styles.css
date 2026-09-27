@@ -621,23 +621,9 @@ dialog.facts .close:hover { color: var(--tx); }
 .fact-row span:first-child { color: var(--mut); }
 .fact-row span:last-child { font-family: var(--mono); text-align: right; }
 
-/* The update dialog reuses dialog.facts for its surface; only the token form and
-   the status line are its own. */
+/* The update dialog reuses dialog.facts for its surface; only the status line
+   and the button row are its own. */
 dialog.facts .hint { margin: 4px 0 10px; }
-.upd-label { display: block; font-size: 12px; color: var(--mut); margin-top: 10px; }
-dialog.facts input[type="password"] {
-  width: 100%;
-  margin-top: 5px;
-  padding: 7px 9px;
-  border: 1px solid var(--bd);
-  border-radius: var(--radius-xs);
-  background: var(--panel);
-  color: var(--tx);
-  font: inherit;
-}
-dialog.facts input[type="password"]:focus { outline: none; border-color: var(--acc); }
-.upd-chk { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-top: 12px; }
-.upd-chk input { accent-color: var(--acc); }
 .upd-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .upd-msg { font-size: 12.5px; margin-top: 10px; white-space: pre-wrap; }
 .upd-msg .err { color: var(--bad); }

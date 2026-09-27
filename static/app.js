@@ -1001,8 +1001,12 @@ function openUpdate() {
   fetch('/api/update')
     .then((r) => r.json())
     .then((d) => {
+      if (d.repo) {
+        $('#update-src').textContent = d.repo;
+        $('#update-src').href = 'https://github.com/' + d.repo;
+      }
       $('#update-rev').textContent = d.rev
-        ? `installed ${d.short}${d.subject ? ' — ' + d.subject : ''}`
+        ? `installed ${d.short || d.rev}`
         : 'installed revision unknown (this image carries no .tostai_rev)';
     })
     .catch(() => {

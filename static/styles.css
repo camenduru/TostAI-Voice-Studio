@@ -624,6 +624,7 @@ dialog.facts .close:hover { color: var(--tx); }
 /* The update dialog reuses dialog.facts for its surface; only the status line
    and the button row are its own. */
 dialog.facts .hint { margin: 4px 0 10px; }
+dialog.facts .hint a { color: var(--acc); }
 .upd-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .upd-msg { font-size: 12.5px; margin-top: 10px; white-space: pre-wrap; }
 .upd-msg .err { color: var(--bad); }

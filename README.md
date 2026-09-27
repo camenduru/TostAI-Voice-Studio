@@ -1,4 +1,12 @@
-# TostAI Voice Studio
+🐣 Please follow me for new updates: https://x.com/camenduru <br />
+🔥 Please join our discord server: https://discord.gg/k5BwmmvJJU <br />
+🥳 Please become my sponsor: https://github.com/sponsors/camenduru <br />
+🍞 TostUI repo: https://github.com/camenduru/TostUI
+
+#### 🍞 Tost AI - Voice Studio
+
+<img width="3840" height="2160" alt="Screenshot 2026-09-27 154324" src="https://github.com/user-attachments/assets/d27c5f5a-7b0f-4bc7-a849-45315adb7dbe" />
+
 
 A web app for **Breeze TTS 2** that exposes every capability the model has —
 voice design, voice clone, voice direction, plain speech, bilingual EN/ZH
